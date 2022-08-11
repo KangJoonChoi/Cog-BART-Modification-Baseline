@@ -3,14 +3,17 @@ import torch
 import fitlog
 import logging
 import numpy as np
-import re
+import bert_score
+from nltk.translate.bleu_score import sentence_bleu
+
+
 from tqdm import tqdm, trange
 from sklearn.metrics import f1_score, accuracy_score
-from nltk.translate.bleu_score import sentence_bleu
-from transformers import(
-    AutoTokenizer,
+
+from transformers import (
     AdamW,
     get_linear_schedule_with_warmup,
+    AutoTokenizer,
 )
 
 logger = logging.getLogger(__name__)
@@ -19,6 +22,7 @@ tokenizer = AutoTokenizer.from_pretrained(
 	"facebook/bart-base",
 	cache_dir=None,
 	use_fast=True)
+
 
 def train(train_dataloader, eval_dataloader, test_dataloader, model, training_args, other_args):
     if not os.path.exists(training_args.output_dir):
@@ -165,17 +169,21 @@ def evaluate(training_args, other_args, eval_loader, model, eval_or_test):
     all_preds, all_labels = [], []
     bleu_sum = 0
     bleu_count = 0
+    bert_count = 0
+    a = torch.zeros(1)
+    bert_sum = [a,a,a]
     for batch in tqdm(eval_loader, desc=eval_or_test):
         model.eval()
         batch = tuple(v.to(training_args.device) for _, v in batch.items())
 
         with torch.no_grad():
-            context_mask = torch.sum(batch[1], dim = -1).gt(0)
-            inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'speakers': batch[3]}
+            inputs = {'input_ids': batch[0], 'attention_mask': batch[1], 'speakers': batch[3], 'next_input_ids': batch[4], 'next_attention_mask': batch[5]} #####next 붙은것들 수정
             labels = batch[2]
-            lines = batch[0]
+###################
+            lines = batch[4]
             lines = lines[lines.ne(-100)].cpu().numpy()
             decoded_lines = tokenizer.decode(lines)
+            #print('decoded_lines ', decoded_lines)
             remove_pad = decoded_lines.replace('<pad>', '')
             splitted_lines = remove_pad.split("</s>")
             del splitted_lines[-1]
@@ -183,19 +191,27 @@ def evaluate(training_args, other_args, eval_loader, model, eval_or_test):
              processing_lines = splitted_lines[i]
              processing_lines = processing_lines[processing_lines.find(':')+2:]
              splitted_lines[i] = processing_lines
-             
-            #print('final', splitted_lines)
-            
+           
+            nlines = batch[0]
+            nlines = nlines[nlines.ne(-100)].cpu().numpy()
+            ndecoded_lines = tokenizer.decode(nlines)
+            #print('ndecoded_lines ', ndecoded_lines)
+            nremove_pad = ndecoded_lines.replace('<pad>', '')
+            nsplitted_lines = nremove_pad.split("</s>")
+            del nsplitted_lines[-1]
+            for i in range(len(nsplitted_lines)):
+             nprocessing_lines = nsplitted_lines[i]
+             nprocessing_lines = nprocessing_lines[nprocessing_lines.find(':')+2:]
+             nsplitted_lines[i] = nprocessing_lines
+##################
+
             labels = labels[labels.ne(-100)].cpu().numpy()
 
             outputs = model(**inputs)
             #preds = outputs.cls_logits
             #preds = torch.argmax(preds, dim=-1)
             gen_logits = outputs.logits
-            #print('gen_logits: ', gen_logits)
-
-            gen_logits = torch.argmax(gen_logits, dim=-1)
-            #print('argmaxed gen_logits: ', gen_logits)
+            gen_logits = torch.argmax(gen_logits, dim = -1)
             j = 0
             for i in gen_logits:
              savingstring = tokenizer.decode(i)
@@ -205,23 +221,39 @@ def evaluate(training_args, other_args, eval_loader, model, eval_or_test):
              savingstring = savingstring.replace(': ','')
              #print('before splitted lines: ', splitted_lines[j])
              #print('before saving string: ', savingstring)
-             #print(type(splitted_lines[j]))
-             #print(type(savingstring))
+             #print(splitted_lines[j])
+             #print(savingstring)
+             context_splitted = nsplitted_lines[j].split()
              splitted_splitted = splitted_lines[j].split()
              splitted_saving = savingstring.split()
-             print('splitted_lines', splitted_splitted)
-             print('savingstring', splitted_saving)
+             #print('splitted_lines(Original) ', splitted_splitted)
+             #print('savingstring(Predicted) ', splitted_saving)
              reference = [splitted_splitted]
              #print('reference', reference)
+             print('Past Context', [nsplitted_lines[j]])
+             print('Original', [splitted_lines[j]])
+             print('Generated', [savingstring])
+             BERT_score = bert_score.score([splitted_lines[j]], [savingstring], model_type = 'distilbert-base-uncased')
+             BERT_score = list(BERT_score)
+             print('BERT_score', BERT_score)
+             bert_sum[0] = bert_sum[0] + BERT_score[0]
+             bert_sum[1] = bert_sum[1] + BERT_score[1]
+             bert_sum[2] = bert_sum[2] + BERT_score[2]
+             print(bert_sum)
+             bert_count += 1
              j += 1
              if len(splitted_splitted) <= 4 or len(splitted_saving) <= 4:
               continue
              BLEU_score = sentence_bleu([splitted_splitted], splitted_saving)
-             #print('BLEU score = ', BLEU_score)
+
+             print('BLEU score = ', BLEU_score)
              bleu_sum += BLEU_score
              bleu_count += 1
-             
-             
+
+
+
+
+
             #preds = preds.cpu().numpy()
             #all_labels.append(labels)
             #all_preds.append(preds)
@@ -240,5 +272,9 @@ def evaluate(training_args, other_args, eval_loader, model, eval_or_test):
     #    print("  %s = %s" % (key, str(result[key])))
     #logger.info("Correct / Total num = ({}/{})".format(correct_num, len(all_labels)))
     final_bleu = bleu_sum/bleu_count
+    bert_sum[0] = bert_sum[0]/bert_count
+    bert_sum[1] = bert_sum[1]/bert_count
+    bert_sum[2] = bert_sum[2]/bert_count
+    print('final_bert: ', bert_sum)
     print('final_bleu: ', final_bleu)
     return results
