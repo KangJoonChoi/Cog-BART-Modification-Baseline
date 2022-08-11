@@ -133,7 +133,6 @@ class BartEncoder(BartPretrainedModel):
         elif input_ids is not None:
             input_shape = input_ids.size()
             input_ids = input_ids.view(-1, input_shape[-1])
-            input_shape = input_ids.size()
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.size()[:-1]
         else:
@@ -151,8 +150,6 @@ class BartEncoder(BartPretrainedModel):
         # expand attention_mask
         if attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            #print('attention_mask.size: ',attention_mask.size())
-            #print('expancd_mask.size: ',(_expand_mask(attention_mask, inputs_embeds.dtype)).size())
             attention_mask = _expand_mask(attention_mask, inputs_embeds.dtype)
 
         encoder_states = () if output_hidden_states else None
@@ -288,7 +285,7 @@ class BartDecoder(BartPretrainedModel):
                 :meth:`transformers.PreTrainedTokenizer.encode` and :meth:`transformers.PreTrainedTokenizer.__call__`
                 for details.
 
-                `What are input ID <../glossary.html#input-ids>`__
+                `What are input IDs? <../glossary.html#input-ids>`__
             attention_mask (:obj:`torch.Tensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
 
@@ -972,10 +969,10 @@ class BartForERC(BartPretrainedModel):
             use_cache=None,
             output_attentions=None,
             output_hidden_states=None,
-            return_dict=None,
+            return_dict=None, ############modified part
             speakers=None,
             next_input_ids=None,
-            next_attention_mask=None,
+            next_attention_mask=None, ###############3
     ):
         r"""
         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
@@ -985,13 +982,14 @@ class BartForERC(BartPretrainedModel):
 
         Returns:
         """
-        """
+
         context_mask = torch.sum(attention_mask, dim=-1).gt(0)
 
         batch_size, max_seq_len_ex, max_text_seq_len = input_ids.shape
         seqlens = torch.sum(context_mask, dim=-1)
-
+        #print('before processing')
         if next_input_ids is not None:
+            #print('next_input_ids', next_input_ids)
             decoder_input_ids = shift_tokens_right(
                 next_input_ids[context_mask, :], self.config.pad_token_id, self.config.decoder_start_token_id
             )
@@ -1002,6 +1000,7 @@ class BartForERC(BartPretrainedModel):
             hidden_states_gen = outputs_gen.last_hidden_state
             gen_logits = self.lm_head(hidden_states_gen) + self.final_logits_bias
         # hidden state for classification
+        #print('after processing')
         outputs_cls = self.model(input_ids=input_ids[context_mask, :],
                                  attention_mask=attention_mask[context_mask, :])
         hidden_states_cls = outputs_cls.last_hidden_state
@@ -1030,7 +1029,7 @@ class BartForERC(BartPretrainedModel):
 
         logits = self.ffn(cls_tokens)
         logits_dropout = self.ffn(cls_tokens_dropout)
-
+        
         loss_fct = CrossEntropyLoss()
 
         if next_input_ids is not None:
@@ -1052,38 +1051,13 @@ class BartForERC(BartPretrainedModel):
                 gen_loss=gen_loss
             )
         else:  # evaluate
-#############################################
-"""
-        context_mask = torch.sum(attention_mask, dim = -1).gt(0)
+            return Seq2SeqLMOutput(
+                loss=None,
+                logits=gen_logits,
+                cls_logits=None,
+                last_hidden_states=None,
+            ) ####genlogits 추가
 
-        outputs = self.model(
-                input_ids[context_mask, :],
-                attention_mask=attention_mask[context_mask, :],
-                decoder_input_ids = decoder_input_ids,
-                encoder_outputs=encoder_outputs,
-                decoder_attention_mask=decoder_attention_mask,
-                head_mask=head_mask,
-                decoder_head_mask=decoder_head_mask,
-                cross_attn_head_mask=cross_attn_head_mask,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                decoder_inputs_embeds=decoder_inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict
-            )
-        hidden_states = outputs.last_hidden_state
-        gen_logits = self.lm_head(hidden_states) + self.final_logits_bias
-###########################################
-
-        return Seq2SeqLMOutput(
-            loss=None,
-            logits=gen_logits, #############Originally None
-            cls_logits=None,
-            last_hidden_states=None,
-        )
-############################################
 
 def prepare_inputs_for_generation(
         self,
