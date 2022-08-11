@@ -176,7 +176,7 @@ class ERCDataset(Dataset):
                 # convert label from text to number
                 label_id = self.label_vocab['stoi'][u['label']] if 'label' in u.keys() else -100
                 utterances.append(u['text'])
-                next_sentence.append(u['next_sentence'])
+                next_sentence.append(u['next_sentence']) ###########요주의
                 labels.append(int(label_id))
                 speakers.append(self.speaker_vocab['stoi'][u['speaker']])
 
